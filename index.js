@@ -24,11 +24,19 @@ function Multer (options) {
 
 Multer.prototype._makeMiddleware = function (fields, fileStrategy) {
   function setup () {
+    const regexForIndexedNumber = /\[[0-9]+\]/g
+
     var fileFilter = this.fileFilter
     var filesLeft = Object.create(null)
+    var limitsIncludedPathFields = []
 
     fields.forEach(function (field) {
-      if (typeof field.maxCount === 'number') {
+      if (field.limitsIncludedInPath) {
+        limitsIncludedPathFields.push({
+          ...field,
+          limits: [ ...field.name.match(regexForIndexedNumber) ]
+        })
+      } else if (typeof field.maxCount === 'number') {
         filesLeft[field.name] = field.maxCount
       } else {
         filesLeft[field.name] = Infinity
@@ -36,11 +44,40 @@ Multer.prototype._makeMiddleware = function (fields, fileStrategy) {
     })
 
     function wrappedFileFilter (req, file, cb) {
-      if ((filesLeft[file.fieldname] || 0) <= 0) {
-        return cb(new MulterError('LIMIT_UNEXPECTED_FILE', file.fieldname))
+
+      if (filesLeft[file.fieldname] || (filesLeft[file.fieldname] || 0) <= 0) {
+
+        let found = false
+        for(const limitsIncludedPathField of limitsIncludedPathFields) {
+          if (limitsIncludedPathField.name.replace(regexForIndexedNumber, '[]')
+              === file.fieldname.replace(regexForIndexedNumber, '[]')) {
+
+            const fileIndexes = [ ...file.fieldname.match(regexForIndexedNumber), '[0]']
+
+            let i = 0;
+            for (; i < limitsIncludedPathField.limits.length && limitsIncludedPathField.limits.length == fileIndexes.length; i++) {
+              if (fileIndexes[i] > limitsIncludedPathField.limits[i]) {
+                break
+              }
+            }
+            if (i == limitsIncludedPathField.limits.length && i == fileIndexes.length) {
+              found = true
+              lastLimit = parseInt(limitsIncludedPathField.limits[limitsIncludedPathField.limits.length - 1].slice(1, -1))
+              limitsIncludedPathField.limits.pop()
+              limitsIncludedPathField.limits.push('[' + (lastLimit - 1) + ']')
+              break
+            }
+          }
+        }
+
+        if (!found) {
+          return cb(new MulterError('LIMIT_UNEXPECTED_FILE', file.fieldname))
+        }
       }
 
-      filesLeft[file.fieldname] -= 1
+      if (filesLeft[file.fieldname]) {
+        filesLeft[file.fieldname] -= 1
+      }
       fileFilter(req, file, cb)
     }
 
